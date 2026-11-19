@@ -535,6 +535,103 @@ async function handleRevokeOtherSessions(env, session, clientIp) {
 }
 
 // ----------------------------------------------------------------------------
+// FORGOT PASSWORD: SETUP_KEY (একই গোপন কী যা প্রথম সেটআপে লাগে) দিয়ে পাসওয়ার্ড রিসেট।
+// এই অ্যাপে ইউজার মাত্র একজনই (handleSetup দেখুন), তাই username লাগবে না —
+// SETUP_KEY ই একমাত্র প্রমাণ যে এটা প্রকৃত মালিক। রিসেট হলে সব সেশন বাতিল হয়।
+// ----------------------------------------------------------------------------
+
+async function handleForgotPassword(request, env, clientIp) {
+  const envError = checkEnvVars(env);
+  if (envError) return errorResponse(envError, 500);
+
+  const rateLimitKey = `forgot:${clientIp}`;
+  const rateLimit = await checkRateLimit(rateLimitKey, env);
+  if (!rateLimit.allowed) return errorResponse(rateLimit.message, 429);
+
+  const body = await request.json().catch(() => ({}));
+  const { setupKey, newPassword } = body;
+
+  if (!timingSafeEqual(setupKey || "", env.SETUP_KEY)) {
+    await recordFailedAttempt(rateLimitKey, env);
+    return errorResponse("Invalid SETUP_KEY provided.", 401);
+  }
+
+  if (typeof newPassword !== 'string' || newPassword.length < 8 || newPassword.length > 255) {
+    return errorResponse("New password must be a string of 8-255 characters.");
+  }
+
+  const user = await env.DB.prepare(`SELECT id FROM users LIMIT 1`).first();
+  if (!user) {
+    return errorResponse("No account exists yet. Use setup instead.", 404);
+  }
+
+  const newSalt = generateRandomHex(16);
+  const newHash = await hashPassword(newPassword, newSalt, env.SERVER_PEPPER);
+  const now = Math.floor(Date.now() / 1000);
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE users SET password_hash = ?, password_salt = ?, updated_at = ? WHERE id = ?`
+    ).bind(newHash, newSalt, now, user.id),
+    env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(user.id)
+  ]);
+
+  await resetLoginAttempts(rateLimitKey, env);
+  await logAudit(env, user.id, "FORGOT_PASSWORD_RESET", "USER", user.id, null, clientIp);
+  return jsonResponse({ ok: true, message: "Password has been reset. Please log in with your new password." });
+}
+
+// ----------------------------------------------------------------------------
+// CHANGE USERNAME: লগইন করা অবস্থায়, বর্তমান পাসওয়ার্ড দিয়ে নিশ্চিত করে ইউজারনেম বদল।
+// ----------------------------------------------------------------------------
+
+async function handleChangeUsername(request, env, session, clientIp) {
+  const envError = checkEnvVars(env);
+  if (envError) return errorResponse(envError, 500);
+
+  const body = await request.json().catch(() => ({}));
+  const { newUsername, password } = body;
+
+  if (typeof newUsername !== 'string' || newUsername.trim().length < 3 || newUsername.trim().length > 50) {
+    return errorResponse("Username must be a string between 3 and 50 characters.");
+  }
+  if (typeof password !== 'string' || password.length === 0) {
+    return errorResponse("Current password is required.");
+  }
+
+  const user = await env.DB.prepare(
+    `SELECT id, username, password_hash, password_salt FROM users WHERE id = ?`
+  )
+    .bind(session.user_id)
+    .first();
+
+  const computedHash = await hashPassword(password, user.password_salt, env.SERVER_PEPPER);
+  if (!timingSafeEqual(computedHash, user.password_hash)) {
+    return errorResponse("Current password does not match.", 401);
+  }
+
+  const trimmed = newUsername.trim();
+  if (trimmed === user.username) {
+    return jsonResponse({ ok: true, user: { id: user.id, username: user.username } });
+  }
+
+  const clash = await env.DB.prepare(`SELECT id FROM users WHERE username = ? AND id != ?`)
+    .bind(trimmed, user.id)
+    .first();
+  if (clash) {
+    return errorResponse("Username already taken.", 409);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  await env.DB.prepare(`UPDATE users SET username = ?, updated_at = ? WHERE id = ?`)
+    .bind(trimmed, now, user.id)
+    .run();
+
+  await logAudit(env, user.id, "CHANGE_USERNAME", "USER", user.id, { from: user.username, to: trimmed }, clientIp);
+  return jsonResponse({ ok: true, user: { id: user.id, username: trimmed } });
+}
+
+// ----------------------------------------------------------------------------
 // SYNC ENGINE: POST /api/sync & GET /api/sync
 // ----------------------------------------------------------------------------
 
@@ -775,3 +872,4 @@ export default {
     return new Response("Not Found", { status: 404 });
   }
 };
+
