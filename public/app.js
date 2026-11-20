@@ -23,6 +23,8 @@ function errText(e) {
   if (/Too many attempts/i.test(m)) return 'অনেকবার ভুল হয়েছে — কিছুক্ষণ পরে আবার চেষ্টা করুন';
   if (/Current password/i.test(m)) return 'বর্তমান পাসওয়ার্ড মিলছে না';
   if (/SETUP_KEY/i.test(m)) return 'সেটআপ কী ভুল';
+  if (/Username already taken/i.test(m)) return 'এই ইউজারনেম আগে থেকেই আছে, অন্য একটা দিন';
+  if (/No account exists/i.test(m)) return 'এখনো কোনো অ্যাকাউন্ট তৈরি হয়নি — আগে সেটআপ করুন';
   return m;
 }
 
@@ -143,8 +145,31 @@ function moreView() {
     h('label', {}, 'বর্তমান', oldP), h('label', {}, 'নতুন', newP), h('label', {}, 'নিশ্চিত', conf),
     h('button', { class: 'btn full', type: 'submit' }, 'পরিবর্তন করুন'), msg);
 
+  const unMsg = h('p', { class: 'muted', role: 'status' });
+  const newU = h('input', { type: 'text', value: state.user ? state.user.username : '', required: true, minlength: 3, maxlength: 50, autocomplete: 'username', autocapitalize: 'none' });
+  const unPass = h('input', { type: 'password', placeholder: 'বর্তমান পাসওয়ার্ড', autocomplete: 'current-password', required: true, minlength: 8 });
+
+  const unForm = h('form', { onsubmit: async (e) => {
+    e.preventDefault();
+    unMsg.textContent = '';
+    try {
+      const res = await api('/api/auth/change-username', { method: 'POST', body: { newUsername: newU.value.trim(), password: unPass.value } });
+      state.user = res.user;
+      await metaSet('user', res.user);
+      unPass.value = '';
+      unMsg.textContent = 'ইউজারনেম বদলানো হয়েছে।';
+    } catch (ex) {
+      if (ex instanceof AuthError) showAuth('login');
+      unMsg.textContent = errText(ex);
+    }
+  } },
+    h('h3', {}, 'ইউজারনেম পরিবর্তন'),
+    h('label', {}, 'নতুন ইউজারনেম', newU), h('label', {}, 'বর্তমান পাসওয়ার্ড', unPass),
+    h('button', { class: 'btn full', type: 'submit' }, 'পরিবর্তন করুন'), unMsg);
+
   return h('section', {},
     moreMenu(),
+    h('div', { class: 'card' }, unForm),
     h('div', { class: 'card' }, form),
     h('div', { class: 'card' },
       h('h3', {}, 'নিরাপত্তা'),
@@ -207,15 +232,23 @@ function showAuth(mode) {
 
 function authScreen(mode) {
   const isSetup = mode === 'setup';
+  const isForgot = mode === 'forgot';
   const err = h('p', { class: 'err', role: 'alert' });
   const field = (label, attrs) => h('label', {}, label, h('input', attrs));
-  const btn = h('button', { class: 'btn full', type: 'submit' }, isSetup ? 'সেটআপ সম্পন্ন করুন' : 'লগইন');
+  const btn = h('button', { class: 'btn full', type: 'submit' }, isSetup ? 'সেটআপ সম্পন্ন করুন' : isForgot ? 'পাসওয়ার্ড রিসেট করুন' : 'লগইন');
 
   const form = h('form', { onsubmit: async (e) => {
     e.preventDefault();
     err.textContent = ''; btn.disabled = true;
     try {
       const f = new FormData(form);
+      if (isForgot) {
+        if (f.get('newPassword') !== f.get('confirm')) throw new Error('পাসওয়ার্ড দুইবার মিলছে না');
+        await api('/api/auth/forgot-password', { method: 'POST', body: { setupKey: f.get('setupKey'), newPassword: f.get('newPassword') } });
+        showAuth('login');
+        toast('পাসওয়ার্ড রিসেট হয়েছে — এখন নতুন পাসওয়ার্ড দিয়ে লগইন করুন');
+        return;
+      }
       if (isSetup) {
         if (f.get('password') !== f.get('confirm')) throw new Error('পাসওয়ার্ড দুইবার মিলছে না');
         await api('/api/auth/setup', { method: 'POST', body: { setupKey: f.get('setupKey'), username: f.get('username'), password: f.get('password') } });
@@ -226,15 +259,18 @@ function authScreen(mode) {
       err.textContent = errText(ex);
     } finally { btn.disabled = false; }
   } },
-    isSetup && field('সেটআপ কী (SETUP_KEY)', { type: 'password', name: 'setupKey', required: true, autocomplete: 'off' }),
-    field('ইউজারনেম', { type: 'text', name: 'username', required: true, minlength: 3, autocomplete: 'username', autocapitalize: 'none', value: state.user ? state.user.username : '' }),
-    field('পাসওয়ার্ড', { type: 'password', name: 'password', required: true, minlength: 8, autocomplete: isSetup ? 'new-password' : 'current-password' }),
-    isSetup && field('পাসওয়ার্ড আবার', { type: 'password', name: 'confirm', required: true, minlength: 8, autocomplete: 'new-password' }),
-    err, btn);
+    isForgot && h('p', { class: 'muted' }, 'প্রথম সেটআপের সময় যে SETUP_KEY ব্যবহার করেছিলেন, সেটা দিয়ে নতুন পাসওয়ার্ড বসান।'),
+    (isSetup || isForgot) && field('সেটআপ কী (SETUP_KEY)', { type: 'password', name: 'setupKey', required: true, autocomplete: 'off' }),
+    !isForgot && field('ইউজারনেম', { type: 'text', name: 'username', required: true, minlength: 3, autocomplete: 'username', autocapitalize: 'none', value: state.user ? state.user.username : '' }),
+    field(isForgot ? 'নতুন পাসওয়ার্ড' : 'পাসওয়ার্ড', { type: 'password', name: isForgot ? 'newPassword' : 'password', required: true, minlength: 8, autocomplete: (isSetup || isForgot) ? 'new-password' : 'current-password' }),
+    (isSetup || isForgot) && field(isForgot ? 'নতুন পাসওয়ার্ড আবার' : 'পাসওয়ার্ড আবার', { type: 'password', name: 'confirm', required: true, minlength: 8, autocomplete: 'new-password' }),
+    err, btn,
+    !isSetup && !isForgot && h('button', { type: 'button', class: 'link', onclick: () => showAuth('forgot') }, 'পাসওয়ার্ড ভুলে গেছেন?'),
+    isForgot && h('button', { type: 'button', class: 'link', onclick: () => showAuth('login') }, '← লগইনে ফিরে যান'));
 
   return h('div', { class: 'card auth-card' },
     h('img', { class: 'logo', src: '/icons/icon.svg', alt: '' }),
-    h('h1', {}, isSetup ? 'প্রথম সেটআপ' : 'হিসাবখাতা'),
+    h('h1', {}, isSetup ? 'প্রথম সেটআপ' : isForgot ? 'পাসওয়ার্ড রিসেট' : 'হিসাবখাতা'),
     form);
 }
 

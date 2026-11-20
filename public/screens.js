@@ -180,11 +180,19 @@ export async function openProductBook(variantId) {
     dateLabel(r.date).replace(/^[^,]*,\s*/, ''), h('span', {}, r.label, r.who ? ` · ${r.who}` : '', r.unit ? h('small', { class: 'muted' }, ` (${money(r.unit)}/পিস)`) : null),
     r.reserve ? h('span', { class: 'muted' }, `রিজার্ভ ${fmt(r.reserve)}`) : colored(r.qtyIn - r.qtyOut, (r.qtyIn ? '+' + fmt(r.qtyIn) : '−' + fmt(r.qtyOut))), r.reserve ? '' : fmt(r.balQty)]), 'card-tbl'));
   const s = sheet(b.label, body);
+  const delMsg = Math.abs(b.onHand) > 0.004
+    ? `এই পণ্যের স্টকে এখনো ${fmt(b.onHand)} পিস আছে। মুছে ফেললে পণ্যের তালিকা থেকে বাদ যাবে (পুরনো কেনা/বিক্রির হিসাব ঠিকই থাকবে, পরে ফিরিয়ে আনা যাবে)। চালিয়ে যাবেন?`
+    : 'এই পণ্য মুছে ফেলবেন? (পরে ফিরিয়ে আনা যাবে)';
   body.append(h('div', { class: 'grid2' },
     h('button', { class: 'btn', type: 'button', onclick: () => { s.close(); openPurchaseForm(null, { variantId }); } }, '📦 আরও কিনুন'),
     h('button', { class: 'btn', type: 'button', onclick: () => { s.close(); openSaleForm(null, { variantId }); } }, '🛒 বিক্রি করুন'),
     h('button', { class: 'btn', type: 'button', onclick: () => { s.close(); openAdjustForm(variantId); } }, '⚖️ নষ্ট / স্টক ঠিক'),
-    h('button', { class: 'btn', type: 'button', onclick: () => { s.close(); openVariantForm(variantId); } }, '✏️ দাম / নাম এডিট')));
+    h('button', { class: 'btn', type: 'button', onclick: () => { s.close(); openVariantForm(variantId); } }, '✏️ দাম / নাম এডিট'),
+    h('button', { class: 'btn danger', type: 'button', onclick: async () => {
+      if (!confirm(delMsg)) return;
+      s.close();
+      await deleteDoc('product_variants', variantId);
+    } }, '🗑 পণ্য মুছুন')));
 }
 
 // =====================================================================

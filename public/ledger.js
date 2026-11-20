@@ -225,7 +225,9 @@ export function buildLedger(data) {
     } else if (status === 'returned') {
       profit = r2(-courier - fee);
     }
-    if (status !== 'cancelled') lines.push(DR('COURIER', courier), DR('FEE', fee), CR(m, courier, 'courier_out'), CR(m, fee, 'fee_out'));
+    // কুরিয়ার/ফি-র টাকা হাত থেকে বেরোয় শুধু ফলাফল চূড়ান্ত হলে — ডেলিভারড (সফল) বা রিটার্ন (ব্যর্থ, তাও খরচ হয়)।
+    // পেন্ডিং (এখনো পথে, ফলাফল অজানা) বা বাতিল (কুরিয়ারে যায়ইনি) অবস্থায় এই টাকা কাটা ঠিক না।
+    if (status === 'delivered' || status === 'returned') lines.push(DR('COURIER', courier), DR('FEE', fee), CR(m, courier, 'courier_out'), CR(m, fee, 'fee_out'));
     const items = c.items.map((i, idx) => ({ label: vLabel(i.variant_id), qty: num(i.quantity), price: num(i.unit_price), total: c.lineTotals[idx], cost: itemCost.get(i.id) || 0 }));
     const info = { id: s.id, invoice: s.invoice_no, status, customerId: s.customer_id, customer: cust ? cust.name : '', subtotal: c.subtotal, discount: c.discount, revenue: c.revenue, delivery, courier, fee, net, received, due: status === 'delivered' ? r2(net - received) : 0, cogs, profit, items, rawItems: c.items };
     saleInfo.set(s.id, info);
